@@ -16,7 +16,10 @@
 
 import { verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 
-const JWT_SECRET = Deno.env.get("SUPABASE_JWT_SECRET");
+// See note in clay-auth-mint/index.ts: Supabase reserves SUPABASE_* env vars,
+// so the project's JWT secret has to be stored under a custom name we set
+// via `supabase secrets set CB_JWT_SECRET=<value>`.
+const JWT_SECRET = Deno.env.get("CB_JWT_SECRET");
 
 // Comma-separated workspace IDs that are allowed to invoke SFDC / Dust
 // endpoints. Defaults to Clay's internal workspace ("4515") so a stale or
@@ -48,7 +51,7 @@ let cachedKey: CryptoKey | null = null;
 async function getVerifyKey(): Promise<CryptoKey> {
   if (cachedKey) return cachedKey;
   if (!JWT_SECRET) {
-    throw new ClayAuthError(500, "server missing SUPABASE_JWT_SECRET");
+    throw new ClayAuthError(500, "server missing CB_JWT_SECRET");
   }
   cachedKey = await crypto.subtle.importKey(
     "raw",

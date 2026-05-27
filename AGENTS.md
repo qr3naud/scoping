@@ -17,7 +17,7 @@ Flow (see [`src/auth.js`](./src/auth.js) and [`src/internal-bg.js`](./src/intern
 1. Content script asks the service worker for a JWT via `chrome.runtime.sendMessage({ type: "cb:auth:mint" })`.
 2. Service worker reads the user's `api.clay.com` cookies via `chrome.cookies.getAll` (HttpOnly — content script can't) and posts them in the `x-clay-cookie` header to `clay-auth-mint`.
 3. `clay-auth-mint` re-validates the cookie by calling `https://api.clay.com/v3/me` server-side; if Clay returns 200, it then asks `/v3/users/:id/workspaces` for the authoritative workspace membership list. Both are forwarded with the cookie; nothing is logged or persisted.
-4. The function signs a JWT with `SUPABASE_JWT_SECRET` (HS256, 1h expiry) containing `{ sub, email, role: "authenticated", workspaces, iat, exp }` and returns it.
+4. The function signs a JWT with `CB_JWT_SECRET` (HS256, 1h expiry — set to the project's JWT secret from the Supabase dashboard) containing `{ sub, email, role: "authenticated", workspaces, iat, exp }` and returns it.
 5. `src/auth.js` caches the JWT in `__cb.supabaseJwt` + `localStorage` and refreshes 5 min before expiry. `src/supabase.js` uses it as the `Authorization: Bearer` header on every PostgREST call; `src/realtime.js` calls `client.realtime.setAuth(jwt)` so realtime sockets get the same auth.
 
 **Attacker model**: a random Clay user installing the public extension can only ever get a JWT containing *their own* workspaces. RLS denies access to any canvas in a workspace not in their JWT. The SFDC + Dust proxies additionally check `INTERNAL_WORKSPACES` (defaults to `4515`) before accepting any request.
@@ -45,7 +45,7 @@ supabase link --project-ref hqlrnipieyeyikdyzeqt
 
 | Secret | Used by | Where to get it |
 |---|---|---|
-| `SUPABASE_JWT_SECRET` | clay-auth-mint, sfdc-*, dust-proxy | Auto-populated by Supabase on every Edge Function — no action needed |
+| `CB_JWT_SECRET` | clay-auth-mint, sfdc-*, dust-proxy | Supabase Dashboard → Settings → API → JWT Settings → JWT Secret. **Important:** the obvious name `SUPABASE_JWT_SECRET` is reserved by Supabase (`SUPABASE_*` prefix can't be set as a custom secret), so we use `CB_*` instead. |
 | `INTERNAL_WORKSPACES` | sfdc-*, dust-proxy | Comma-separated workspace IDs (default `4515`) |
 | `SFDC_CLIENT_ID` | sfdc-* | Consumer Key of the SFDC External Client App; reuses the calculator's value |
 | `SFDC_USERNAME` | sfdc-* | `sfdc_integration@clay.com` |
@@ -58,7 +58,10 @@ supabase link --project-ref hqlrnipieyeyikdyzeqt
 Set with the Supabase CLI:
 
 ```bash
+# Grab the JWT secret value from Supabase Dashboard → Settings → API
+# (or use `supabase status` after linking) and paste it as CB_JWT_SECRET:
 supabase secrets set --project-ref hqlrnipieyeyikdyzeqt \
+  CB_JWT_SECRET=<dashboard-jwt-secret> \
   INTERNAL_WORKSPACES=4515 \
   SFDC_CLIENT_ID=<consumer-key> \
   SFDC_USERNAME=sfdc_integration@clay.com \
@@ -111,7 +114,14 @@ Expected: a successful token exchange + a 3-row Opportunity sample query against
 
 ### Rotating the Supabase JWT secret
 
-If the project JWT secret leaks (it's auto-managed by Supabase, so this would require a Supabase support ticket), every minted JWT becomes invalid and the extension will surface 401s until users reload. There's no rotation playbook beyond Supabase's UI; the extension's auth client will recover automatically on the next page load.
+If the project JWT secret is rotated (Supabase Dashboard → Settings → API → JWT Settings → Generate new JWT secret), every minted JWT becomes invalid and the extension will surface 401s. After rotation, update the Edge Function secret too:
+
+```bash
+supabase secrets set --project-ref hqlrnipieyeyikdyzeqt CB_JWT_SECRET=<new-value>
+supabase functions deploy clay-auth-mint sfdc-search-opportunities sfdc-get-opportunity dust-proxy
+```
+
+The extension's auth client will then recover on the next page load.
 
 ### Rotating the Dust API key
 

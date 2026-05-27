@@ -16,8 +16,9 @@
 //      workspaces.routes.ts:262), so an attacker cannot ask for someone
 //      else's workspaces.
 //
-//   3. Signs a JWT with SUPABASE_JWT_SECRET (HS256). PostgREST and every
-//      Phase-2 Edge Function then verify the signature and read claims via
+//   3. Signs a JWT with CB_JWT_SECRET (HS256, set to the project's JWT
+//      secret from the Supabase dashboard). PostgREST and every Phase-2
+//      Edge Function then verify the signature and read claims via
 //      `auth.jwt()` (RLS) or `requireClayAuth` (proxies).
 //
 // The cookie is never logged, persisted, or forwarded to non-Clay hosts;
@@ -26,7 +27,11 @@
 
 import { create, getNumericDate } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 
-const JWT_SECRET = Deno.env.get("SUPABASE_JWT_SECRET");
+// Custom env var name (NOT SUPABASE_JWT_SECRET): Supabase reserves the
+// `SUPABASE_*` prefix, so you can't set that as a function secret. Copy the
+// project's JWT secret from Supabase Dashboard → Settings → API → JWT Settings
+// and `supabase secrets set CB_JWT_SECRET=<value>`.
+const JWT_SECRET = Deno.env.get("CB_JWT_SECRET");
 const CLAY_API = "https://api.clay.com";
 
 // Allow-list of origins that may invoke this function. The internal and
@@ -98,8 +103,8 @@ Deno.serve(async (req) => {
   }
 
   if (!JWT_SECRET) {
-    console.error("[clay-auth-mint] missing SUPABASE_JWT_SECRET env var");
-    return new Response("server misconfigured", { status: 500, headers: cors });
+    console.error("[clay-auth-mint] missing CB_JWT_SECRET env var");
+    return new Response("server misconfigured (CB_JWT_SECRET not set)", { status: 500, headers: cors });
   }
 
   // The extension SW puts the user's Clay session cookie(s) in this header.
