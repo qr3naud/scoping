@@ -31,8 +31,8 @@ The JWT minted by `clay-auth-mint` carries a `features` claim alongside `workspa
 | `internal_branding` | Toolbar button label ("GTME View" vs "Scoping") + branded copy in help text + home empty-state |
 | `pricing_comparison` | Old vs New Pricing modal entry point + the modal itself |
 | `gtme_export` | "Export to GTME Calculator" + "Export to DealOps" rows in the export menu |
-| `dust` | "Generate POC" toolbar button + Dust popover |
-| `sfdc` | Salesforce opportunity picker toolbar element + linked-opp pill |
+| `dust` | "Generate POC" toolbar button + Dust popover. Generation is also auto-fired when an SFDC opportunity is linked (uses the opp name); the button shows a spinner while the agent runs and the popover polls the Dust conversation until it returns a Google Doc link |
+| `sfdc` | Salesforce opportunity picker toolbar element + linked-opp pill. Linking an opp also auto-triggers the Dust POC flow when the `dust` flag is on (see `linkCanvasToOpportunity` in `src/sfdc.js`) |
 
 The flag list is computed in [`supabase/functions/clay-auth-mint/index.ts`](./supabase/functions/clay-auth-mint/index.ts) (look for `INTERNAL_FEATURES`). Adding a new internal-only feature is a two-step change:
 
@@ -50,10 +50,10 @@ Edge Functions and SQL migrations live under [`supabase/`](./supabase/):
 - `supabase/functions/clay-auth-mint/` — Phase-1 JWT minter
 - `supabase/functions/sfdc-search-opportunities/` — SOSL search
 - `supabase/functions/sfdc-get-opportunity/` — single-record fetch
-- `supabase/functions/dust-proxy/` — Dust conversation + agent-list proxy
+- `supabase/functions/dust-proxy/` — Dust proxy: `POST /conversations` (create), `GET /conversations?id=` (poll an in-flight POC for completion + the generated doc link), `GET /agents` (health check)
 - `supabase/functions/_shared/sfdcAuth.ts` — JWT Bearer Flow helper (copied verbatim from `monorepo/apps/mono-calculator/supabase/functions/_shared/sfdcAuth.ts`)
 - `supabase/functions/_shared/requireClayAuth.ts` — verifies the Phase-1 JWT + INTERNAL_WORKSPACES gate
-- `supabase/migrations/` — Phase-1 RLS lockdown + Phase-2 `sfdc_opportunity_*` columns
+- `supabase/migrations/` — Phase-1 RLS lockdown + Phase-2 `sfdc_opportunity_*` columns + Phase-3 `dust_*` POC columns
 
 The Supabase project is `hqlrnipieyeyikdyzeqt` (project URL `https://hqlrnipieyeyikdyzeqt.supabase.co`). Link the CLI in this directory before deploying:
 

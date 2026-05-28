@@ -17,6 +17,12 @@
 //     Body: { body: <DustConversationPayload> }
 //     → POST https://dust.tt/api/v1/w/{wId}/assistant/conversations
 //
+//   GET  /dust-proxy/conversations?id={cId}
+//     → GET https://dust.tt/api/v1/w/{wId}/assistant/conversations/{cId}
+//        (poll an in-flight POC conversation for completion; read-only so
+//         no agent allow-list check — requireClayAuth's internal-workspace
+//         gate is sufficient)
+//
 //   GET  /dust-proxy/agents
 //     → GET https://dust.tt/api/v1/w/{wId}/assistant/agent_configurations
 //        (health-check / probe endpoint, mirrors the old probeKey call)
@@ -129,6 +135,54 @@ Deno.serve(async (req) => {
       });
     } catch (err) {
       console.error("[dust-proxy:agents] fetch failed:", err);
+      return jsonResponse({ error: "dust unreachable" }, 502);
+    }
+  }
+
+  // ----- GET /conversations?id={cId} — poll an in-flight POC ----------------
+  // Read-only fetch of an existing conversation so the client can poll for
+  // the agent's reply (and the generated Google Doc link). No agent
+  // allow-list gate here — reading a conversation can't pivot the shared
+  // key into a new agent invocation, and requireClayAuth already restricts
+  // this to internal-workspace users.
+  if (req.method === "GET" && route === "conversations") {
+    const conversationId = (url.searchParams.get("id") ?? "").trim();
+    if (!conversationId) {
+      return jsonResponse({ error: "missing `id` query param" }, 400);
+    }
+    console.log(
+      `[dust-proxy:conversations:get] user=${claims.sub} id=${conversationId}`,
+    );
+    try {
+      const endpoint = `${DUST_BASE_URL}/api/v1/w/${DUST_WORKSPACE_ID}/assistant/conversations/${encodeURIComponent(conversationId)}`;
+      const res = await fetch(endpoint, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${DUST_API_KEY}` },
+        credentials: "omit",
+      });
+      const text = await res.text();
+      let data: unknown = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+      if (!res.ok) {
+        console.warn(
+          `[dust-proxy:conversations:get] non-OK ${res.status} ${res.statusText}`,
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          ok: res.ok,
+          status: res.status,
+          statusText: res.statusText,
+          data,
+          rawText: text || undefined,
+        }),
+        {
+          status: res.ok ? 200 : (res.status >= 400 && res.status < 600 ? res.status : 502),
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    } catch (err) {
+      console.error("[dust-proxy:conversations:get] fetch failed:", err);
       return jsonResponse({ error: "dust unreachable" }, 502);
     }
   }
