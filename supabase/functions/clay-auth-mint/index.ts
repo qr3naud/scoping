@@ -34,6 +34,29 @@ import { create, getNumericDate } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 const JWT_SECRET = Deno.env.get("CB_JWT_SECRET");
 const CLAY_API = "https://api.clay.com";
 
+// Workspaces whose members get the internal feature set. Mirrors the
+// INTERNAL_WORKSPACES gate that requireClayAuth.ts uses for the SFDC/Dust
+// proxies — same env var, same semantics. Default `4515` is Clay's own
+// workspace.
+const INTERNAL_WORKSPACES = (Deno.env.get("INTERNAL_WORKSPACES") ?? "4515")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// Feature flags handed to extension users who belong to an internal workspace.
+// Drives `__cb.hasFeature(...)` gating in the extension; NOT a security
+// boundary (the Edge Function proxies independently verify INTERNAL_WORKSPACES
+// via requireClayAuth). When adding a new internal-only feature, add its
+// flag name here AND the matching `__cb.hasFeature("...")` check at the
+// extension call site.
+const INTERNAL_FEATURES = [
+  "sfdc",
+  "dust",
+  "pricing_comparison",
+  "gtme_export",
+  "internal_branding",
+] as const;
+
 // Allow-list of origins that may invoke this function. The internal and
 // public extensions get fresh chrome-extension IDs per install, so we
 // accept any chrome-extension:// origin AND any moz-extension:// origin
@@ -157,6 +180,15 @@ Deno.serve(async (req) => {
     return new Response("clay workspaces unreachable", { status: 502, headers: cors });
   }
 
+  // Derive the feature list from workspace membership. Internal users
+  // (members of any INTERNAL_WORKSPACES) get the full internal set;
+  // everyone else gets an empty list. The extension reads this off the
+  // JWT via __cb.hasFeature(...) to decide which UI to render. The
+  // SFDC/Dust proxies do NOT trust this claim — they re-check
+  // INTERNAL_WORKSPACES server-side in requireClayAuth.
+  const isInternal = workspaces.some((w) => INTERNAL_WORKSPACES.includes(w));
+  const features: string[] = isInternal ? [...INTERNAL_FEATURES] : [];
+
   // 3) Sign the JWT with Supabase's project JWT secret. Supabase verifies
   //    the signature automatically; RLS sees the payload via auth.jwt().
   const key = await signKey(JWT_SECRET);
@@ -170,6 +202,7 @@ Deno.serve(async (req) => {
       name: me.fullName ?? null,
       role: "authenticated",
       workspaces,
+      features,
       iat: issuedAt,
       exp: expiresAt,
     },
@@ -178,7 +211,7 @@ Deno.serve(async (req) => {
 
   // Audit. Never log the cookie itself; log just the user we minted for.
   console.log(
-    `[clay-auth-mint] user=${userId} workspaces=${workspaces.length}`,
+    `[clay-auth-mint] user=${userId} workspaces=${workspaces.length} features=${features.length}`,
   );
 
   return new Response(
@@ -188,6 +221,7 @@ Deno.serve(async (req) => {
       userId,
       email: me.email ?? null,
       workspaces,
+      features,
     }),
     {
       status: 200,

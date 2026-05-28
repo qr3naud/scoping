@@ -1,0 +1,35 @@
+# Supabase config for the brainstorm-extension project (hqlrnipieyeyikdyzeqt).
+#
+# Only function-level settings are pinned here. Project-level settings live in
+# the Supabase Dashboard; nothing else from this file is required for deploys.
+#
+# Why this file matters: `supabase functions deploy <name>` reads the
+# `verify_jwt` setting from here. Without an explicit `false`, the deploy
+# resets the function to the Supabase default (JWT required), which would
+# break `clay-auth-mint` — that function is the bootstrap that mints the
+# user's first JWT, so it cannot itself require a JWT to be invoked. (Symptom
+# when broken: every Edge Function call from the extension returns
+# `UNAUTHORIZED_NO_AUTH_HEADER` from the Supabase gateway, before the
+# request even reaches our handler code.)
+project_id = "hqlrnipieyeyikdyzeqt"
+
+# clay-auth-mint is the JWT bootstrap. It authenticates the caller by
+# forwarding their Clay session cookie to api.clay.com/v3/me — no JWT in
+# the request is correct and expected. Must stay false.
+[functions.clay-auth-mint]
+verify_jwt = false
+
+# sfdc-search-opportunities, sfdc-get-opportunity, and dust-proxy all
+# expect the caller to already hold a JWT (minted by clay-auth-mint above).
+# Supabase's default verify_jwt = true does the first-pass signature check
+# at the gateway; requireClayAuth then re-verifies with our CB_JWT_SECRET
+# and runs the INTERNAL_WORKSPACES gate. Listing them explicitly keeps the
+# config self-documenting even though `true` is also Supabase's default.
+[functions.sfdc-search-opportunities]
+verify_jwt = true
+
+[functions.sfdc-get-opportunity]
+verify_jwt = true
+
+[functions.dust-proxy]
+verify_jwt = true

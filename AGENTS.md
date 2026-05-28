@@ -4,9 +4,9 @@ User-facing install instructions live in [`README.md`](./README.md). This file i
 
 ## Two extensions, one source tree
 
-This repo (`qr3naud/scoping`) is the **internal** extension. A stripped-down **public** spin-off lives at [`qr3naud/self-scoping`](https://github.com/qr3naud/self-scoping), produced by `build.js` from this same source tree — never edited directly.
+This repo (`qr3naud/scoping`) is the **internal** extension. A near-identical **public** spin-off lives at [`qr3naud/self-scoping`](https://github.com/qr3naud/self-scoping), produced by `build.js` from this same source tree — never edited directly.
 
-The internal extension uses the source as-is. The public build strips internal-only modules, sentinel-marked blocks, and the `docs/` / `supabase/` / `scripts/` folders, then rewrites a small set of brand strings (toolbar label, repo path).
+Both builds ship the same JS and CSS. The public build only differs by what it *omits*: `docs/` (genuine internal-only context), `supabase/` and `scripts/` (server-side, deployed separately), `AGENTS.md` and build tooling. The actual feature gating happens at runtime via the `features` claim on the Phase-1 JWT — see the next section.
 
 ## Auth model (Phase 1, v3.27+)
 
@@ -21,6 +21,27 @@ Flow (see [`src/auth.js`](./src/auth.js) and [`src/internal-bg.js`](./src/intern
 5. `src/auth.js` caches the JWT in `__cb.supabaseJwt` + `localStorage` and refreshes 5 min before expiry. `src/supabase.js` uses it as the `Authorization: Bearer` header on every PostgREST call; `src/realtime.js` calls `client.realtime.setAuth(jwt)` so realtime sockets get the same auth.
 
 **Attacker model**: a random Clay user installing the public extension can only ever get a JWT containing *their own* workspaces. RLS denies access to any canvas in a workspace not in their JWT. The SFDC + Dust proxies additionally check `INTERNAL_WORKSPACES` (defaults to `4515`) before accepting any request.
+
+## Feature flags (Phase 3, v3.28+)
+
+The JWT minted by `clay-auth-mint` carries a `features` claim alongside `workspaces`. Internal-workspace members (anyone whose JWT contains a workspace in `INTERNAL_WORKSPACES`) get the full set; everyone else gets `[]`. Current flags:
+
+| Flag | Gates |
+|---|---|
+| `internal_branding` | Toolbar button label ("GTME View" vs "Scoping") + branded copy in help text + home empty-state |
+| `pricing_comparison` | Old vs New Pricing modal entry point + the modal itself |
+| `gtme_export` | "Export to GTME Calculator" + "Export to DealOps" rows in the export menu |
+| `dust` | "Generate POC" toolbar button + Dust popover |
+| `sfdc` | Salesforce opportunity picker toolbar element + linked-opp pill |
+
+The flag list is computed in [`supabase/functions/clay-auth-mint/index.ts`](./supabase/functions/clay-auth-mint/index.ts) (look for `INTERNAL_FEATURES`). Adding a new internal-only feature is a two-step change:
+
+1. Add the flag name to `INTERNAL_FEATURES` in `clay-auth-mint/index.ts` and redeploy.
+2. At the extension call site, gate the UI on `__cb.hasFeature("your_flag")`.
+
+For UI that exposes a public API surface (like `__cb.sfdc = { ... }` in `src/sfdc.js` or `__cb.startDustPoc` in `src/dust-poc.js`), wrap the assignment in a `publishApi()` helper that runs only when the feature is on. Consumers can then use `__cb.thing?.method` and short-circuit naturally when the feature is off.
+
+**This is a UX filter, not a security boundary.** A user who edits `__cb.userFeatures` in DevTools can re-render hidden buttons, but the SFDC/Dust proxies re-verify `INTERNAL_WORKSPACES` server-side via `requireClayAuth`, and the database enforces RLS on `workspace_id ∈ jwt.workspaces`. The flag list just keeps the UI honest.
 
 ## Supabase project layout
 
@@ -89,6 +110,14 @@ supabase functions deploy sfdc-get-opportunity
 supabase functions deploy dust-proxy
 ```
 
+> **Critical:** `clay-auth-mint` MUST be deployed with JWT verification **off** at the Supabase gateway, because it is the bootstrap that mints the user's first JWT — it cannot itself require one to be invoked. The `verify_jwt = false` setting in [`supabase/config.toml`](./supabase/config.toml) makes this stick across deploys. If you ever see every Edge Function call from the extension fail with `{"code":"UNAUTHORIZED_NO_AUTH_HEADER"}`, the config wasn't applied — re-deploy with the explicit flag:
+>
+> ```bash
+> supabase functions deploy clay-auth-mint --no-verify-jwt
+> ```
+>
+> The SFDC + Dust proxies stay on the default (verify_jwt = true) so the Supabase gateway does the first-pass signature check before `requireClayAuth` runs.
+
 ### Cutover order (Phase 1)
 
 Existing extension installs that haven't pulled the new version will break the moment RLS becomes restrictive — they have no JWT to present. Per the rollout plan, nobody is using the extension's Supabase storage in production yet, so this is a clean cutover. Order:
@@ -150,34 +179,31 @@ If you cloned somewhere else, export `BUILD_OUT` so it points at your clone. The
 
 That runs `node build.js`, which:
 
-1. Copies every source file into `$BUILD_OUT` except entries in `build.config.js → exclude` (e.g. `src/sfdc.js`, `src/internal-bg.js`, `src/dust-poc.js`, the entire `supabase/` and `scripts/` directories, `docs/`, this repo's `.git`, the build tooling itself, this file).
-2. Strips every `__CB_INTERNAL_ONLY_BEGIN: <name>` … `__CB_INTERNAL_ONLY_END` sentinel block from `.js`/`.css` files. Existing names: `pricingComparison`, `dustPoc`, `sfdc`, `gtmeExport`, `dealopsExport`, `legacyPricing`.
-3. Runs the ordered branding substitutions in `build.config.js`. Today that swaps the toolbar label `GTME View` → `Scoping`, the repo URL fragment `qr3naud/scoping` → `qr3naud/self-scoping`, and the install dir `clay-scoping-extension` → `clay-self-scoping-extension`. Manifest name and console log prefix stay `Clay Scoping Tool` / `[Clay Scoping]`.
-4. Re-serializes `manifest.json` with `src/sfdc.js`, `src/pricing-comparison.js`, `src/dust-poc.js` filtered out of `content_scripts[].js`, `styles/sfdc.css` + `styles/dust-poc.css` filtered out of `content_scripts[].css`, and the `background` field deleted (the public build has no service worker — no SFDC/Dust/auth-mint proxying to do).
-5. Writes a fresh `.gitignore` (`config.publicGitignore`) into the output.
-6. Commits + pushes to `qr3naud/self-scoping`.
+1. Copies every source file into `$BUILD_OUT` except entries in `build.config.js → exclude` (`supabase/`, `scripts/`, `docs/`, this file, `_metadata/`, build tooling, `.git`, `.gitignore`, `node_modules`, `dist`).
+2. Writes a fresh `.gitignore` (`config.publicGitignore`) into the output.
+3. Commits + pushes to `qr3naud/self-scoping`.
 
-**Note on the public extension and Phase 1 auth:** the public build ships `src/auth.js` and the JWT flow. Without a service worker (`background` is dropped) it cannot mint JWTs, so the public extension currently cannot read/write any canvases — RLS denies anon. This is acceptable because the public extension is for self-scoping users who can stand up their own Supabase project; full public-extension parity is out of scope for this rollout (see [docs/](./docs/) for the open work).
+That's it — no sentinel stripping, no branding substitutions, no manifest rewrite. The public build is bit-for-bit identical to the source for every JS/CSS/HTML file the extension actually loads. Internal-only behavior (SFDC, Dust POC, pricing comparison, GTME export, "GTME View" branding) is gated at runtime by the JWT's `features` claim — see the "Feature flags" section above.
 
-## Adding a new internal-only block
+**Note on the public extension:** because the JWT mint requires reading the user's Clay session cookie (HttpOnly), the service worker (`src/internal-bg.js`) ships to the public build too. Public users who are logged into Clay get a JWT scoped to their own workspaces and can read/write canvases there — RLS denies cross-workspace access, and the SFDC/Dust proxies deny non-internal users via `INTERNAL_WORKSPACES`. The public extension is, in effect, a fully-functional "self-scoping" tool for any Clay user.
 
-Wrap it in sentinels — they look like comments in the source, so the internal extension runs them as-is:
+## Adding a new internal-only capability
 
-```js
-// __CB_INTERNAL_ONLY_BEGIN: <feature-name>
-const internalThing = ...
-// __CB_INTERNAL_ONLY_END
-```
+Add a runtime feature flag:
 
-CSS uses the `/* … */` form:
-
-```css
-/* __CB_INTERNAL_ONLY_BEGIN: <feature-name> */
-.cb-internal-thing { ... }
-/* __CB_INTERNAL_ONLY_END */
-```
-
-For whole-file removal (like `src/sfdc.js`), add the path to `build.config.js → exclude`. If the file is also injected by the manifest, add it to `excludeFromManifestScripts` (or `excludeFromManifestStyles` for CSS) so the manifest's `content_scripts[].js/css` arrays drop it cleanly.
+1. **Pick a flag name** (snake_case, e.g. `my_feature`).
+2. **Add it to `INTERNAL_FEATURES`** in [`supabase/functions/clay-auth-mint/index.ts`](./supabase/functions/clay-auth-mint/index.ts) and redeploy:
+   ```bash
+   supabase functions deploy clay-auth-mint
+   ```
+3. **Gate the UI** at each call site:
+   ```js
+   if (__cb.hasFeature("my_feature")) {
+     // create button, register handler, etc.
+   }
+   ```
+4. **For modules that expose a public surface** (`__cb.foo = { ... }`), wrap the assignment in a `publishApi()` helper that only runs when the flag is on, and re-evaluates after `__cb.supabaseJwtReady` resolves so first-install users get the API once the mint completes. See `src/sfdc.js` for the canonical pattern.
+5. **For server-side gating** (proxy endpoints that should refuse non-internal users), use `requireClayAuth` from [`supabase/functions/_shared/requireClayAuth.ts`](./supabase/functions/_shared/requireClayAuth.ts) — it checks `INTERNAL_WORKSPACES` independently of the JWT's `features` claim, so a user tampering with `__cb.userFeatures` in DevTools still gets a 403.
 
 ## Workspace partition (historical)
 
