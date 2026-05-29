@@ -57,12 +57,11 @@ const INTERNAL_FEATURES = [
   "internal_branding",
 ] as const;
 
-// Allow-list of origins that may invoke this function. The internal and
-// public extensions get fresh chrome-extension IDs per install, so we
-// accept any chrome-extension:// origin AND any moz-extension:// origin
-// (in case anyone runs the source in Firefox dev mode). The `null` origin
-// (no Origin header) is rejected — every legitimate caller is a browser
-// extension that sends one.
+// Allow-list of origins that may invoke this function. The extension gets a
+// fresh chrome-extension ID per install, so we accept any chrome-extension://
+// origin AND any moz-extension:// origin (in case anyone runs the source in
+// Firefox dev mode). The `null` origin (no Origin header) is rejected — every
+// legitimate caller is a browser extension that sends one.
 const ALLOWED_ORIGIN_PREFIXES = ["chrome-extension://", "moz-extension://"];
 
 function isAllowedOrigin(origin: string | null): boolean {

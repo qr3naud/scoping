@@ -2,11 +2,7 @@
 
 User-facing install instructions live in [`README.md`](./README.md). This file is for whoever is editing the extension code.
 
-## Two extensions, one source tree
-
-This repo (`qr3naud/scoping`) is the **internal** extension. A near-identical **public** spin-off lives at [`qr3naud/self-scoping`](https://github.com/qr3naud/self-scoping), produced by `build.js` from this same source tree — never edited directly.
-
-Both builds ship the same JS and CSS. The public build only differs by what it *omits*: `docs/` (genuine internal-only context), `supabase/` and `scripts/` (server-side, deployed separately), `AGENTS.md` and build tooling. The actual feature gating happens at runtime via the `features` claim on the Phase-1 JWT — see the next section.
+The extension lives at `qr3naud/scoping`. Internal-only behavior (SFDC, Dust POC, pricing comparison, GTME export, "GTME View" branding) is gated at runtime via the `features` claim on the Phase-1 JWT — see the "Feature flags" section below.
 
 ## Auth model (Phase 1, v3.27+)
 
@@ -20,7 +16,7 @@ Flow (see [`src/auth.js`](./src/auth.js) and [`src/internal-bg.js`](./src/intern
 4. The function signs a JWT with `CB_JWT_SECRET` (HS256, 1h expiry — set to the project's JWT secret from the Supabase dashboard) containing `{ sub, email, role: "authenticated", workspaces, iat, exp }` and returns it.
 5. `src/auth.js` caches the JWT in `__cb.supabaseJwt` + `localStorage` and refreshes 5 min before expiry. `src/supabase.js` uses it as the `Authorization: Bearer` header on every PostgREST call; `src/realtime.js` calls `client.realtime.setAuth(jwt)` so realtime sockets get the same auth.
 
-**Attacker model**: a random Clay user installing the public extension can only ever get a JWT containing *their own* workspaces. RLS denies access to any canvas in a workspace not in their JWT. The SFDC + Dust proxies additionally check `INTERNAL_WORKSPACES` (defaults to `4515`) before accepting any request.
+**Attacker model**: any Clay user can only ever get a JWT containing *their own* workspaces. RLS denies access to any canvas in a workspace not in their JWT. The SFDC + Dust proxies additionally check `INTERNAL_WORKSPACES` (defaults to `4515`) before accepting any request.
 
 ## Feature flags (Phase 3, v3.28+)
 
@@ -161,32 +157,6 @@ supabase functions deploy dust-proxy  # evicts the SW's old in-memory state
 
 Reps don't need to do anything — the key never lived on the client.
 
-## Setup (per maintainer machine)
-
-Clone the public repo somewhere `build.js` can write to. The default `BUILD_OUT` is `../../../self-scoping` (a sibling of `clay-base`):
-
-```bash
-git clone git@github.com:qr3naud/self-scoping.git ~/Developer/self-scoping
-```
-
-If you cloned somewhere else, export `BUILD_OUT` so it points at your clone. There are no npm dependencies — `build.js` runs on plain Node.
-
-## Releasing the public extension
-
-```bash
-./release.sh "feat: short description of the change"
-```
-
-That runs `node build.js`, which:
-
-1. Copies every source file into `$BUILD_OUT` except entries in `build.config.js → exclude` (`supabase/`, `scripts/`, `docs/`, this file, `_metadata/`, build tooling, `.git`, `.gitignore`, `node_modules`, `dist`).
-2. Writes a fresh `.gitignore` (`config.publicGitignore`) into the output.
-3. Commits + pushes to `qr3naud/self-scoping`.
-
-That's it — no sentinel stripping, no branding substitutions, no manifest rewrite. The public build is bit-for-bit identical to the source for every JS/CSS/HTML file the extension actually loads. Internal-only behavior (SFDC, Dust POC, pricing comparison, GTME export, "GTME View" branding) is gated at runtime by the JWT's `features` claim — see the "Feature flags" section above.
-
-**Note on the public extension:** because the JWT mint requires reading the user's Clay session cookie (HttpOnly), the service worker (`src/internal-bg.js`) ships to the public build too. Public users who are logged into Clay get a JWT scoped to their own workspaces and can read/write canvases there — RLS denies cross-workspace access, and the SFDC/Dust proxies deny non-internal users via `INTERNAL_WORKSPACES`. The public extension is, in effect, a fully-functional "self-scoping" tool for any Clay user.
-
 ## Adding a new internal-only capability
 
 Add a runtime feature flag:
@@ -211,4 +181,4 @@ Add a runtime feature flag:
 
 ## Bumping the version
 
-Per repo convention every meaningful change bumps `manifest.json → version` in the same commit. The public build inherits the same number — no separate version field.
+Per repo convention every meaningful change bumps `manifest.json → version` in the same commit.
